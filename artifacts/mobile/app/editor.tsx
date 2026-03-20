@@ -30,10 +30,10 @@ export default function EditorScreen() {
   const [title, setTitle] = useState(existing?.title ?? "");
   const [content, setContent] = useState(existing?.content ?? "");
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState(!!existing);
+  const [hasChanges, setHasChanges] = useState(false);
 
   const contentRef = useRef<TextInput>(null);
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const createdIdRef = useRef<number | null>(noteId);
   const latestTitle = useRef(title);
   const latestContent = useRef(content);
@@ -41,8 +41,8 @@ export default function EditorScreen() {
   useEffect(() => { latestTitle.current = title; }, [title]);
   useEffect(() => { latestContent.current = content; }, [content]);
 
-  const doSave = useCallback(async (t: string, c: string) => {
-    if (!t.trim() && !c.trim()) return;
+  const doSave = useCallback(async (t: string, c: string): Promise<boolean> => {
+    if (!t.trim() && !c.trim()) return false;
     setSaving(true);
     setSaved(false);
     try {
@@ -53,30 +53,40 @@ export default function EditorScreen() {
         createdIdRef.current = note.id;
       }
       setSaved(true);
+      setHasChanges(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      return true;
     } catch {
-      // Silent fail on auto-save; user can try again
+      return false;
     } finally {
       setSaving(false);
     }
   }, [createNote, updateNote]);
 
-  const scheduleSave = useCallback((t: string, c: string) => {
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    setSaved(false);
-    saveTimeoutRef.current = setTimeout(() => {
-      doSave(t, c);
-    }, 800);
+  const handleSave = useCallback(async () => {
+    await doSave(latestTitle.current, latestContent.current);
   }, [doSave]);
 
   const handleBack = useCallback(async () => {
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    const t = latestTitle.current;
-    const c = latestContent.current;
-    if (t.trim() || c.trim()) {
-      await doSave(t, c);
+    if (hasChanges && (latestTitle.current.trim() || latestContent.current.trim())) {
+      Alert.alert("Unsaved Changes", "Do you want to save before leaving?", [
+        {
+          text: "Discard",
+          style: "destructive",
+          onPress: () => router.back(),
+        },
+        {
+          text: "Save",
+          onPress: async () => {
+            await doSave(latestTitle.current, latestContent.current);
+            router.back();
+          },
+        },
+      ]);
+    } else {
+      router.back();
     }
-    router.back();
-  }, [doSave]);
+  }, [doSave, hasChanges]);
 
   const handleDelete = useCallback(() => {
     if (!createdIdRef.current) {
@@ -101,44 +111,65 @@ export default function EditorScreen() {
 
   const handleTitleChange = (t: string) => {
     setTitle(t);
-    scheduleSave(t, latestContent.current);
+    setSaved(false);
+    setHasChanges(true);
   };
 
   const handleContentChange = (c: string) => {
     setContent(c);
-    scheduleSave(latestTitle.current, c);
+    setSaved(false);
+    setHasChanges(true);
   };
 
   const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
   const charCount = content.length;
 
+  const canSave = (title.trim().length > 0 || content.trim().length > 0) && !saving;
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.topBar}>
         <Pressable
-          style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+          style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
           onPress={handleBack}
+          hitSlop={8}
         >
-          <Feather name="chevron-down" size={24} color={C.text} />
+          <Feather name="arrow-left" size={20} color={C.text} />
+          <Text style={styles.backText}>Notes</Text>
         </Pressable>
 
-        <View style={styles.statusRow}>
-          {saving ? (
-            <ActivityIndicator size="small" color={C.textTertiary} />
-          ) : saved ? (
-            <View style={styles.savedBadge}>
-              <Feather name="check" size={12} color={C.tintDeep} />
-              <Text style={styles.savedText}>Saved</Text>
-            </View>
+        <View style={styles.topRight}>
+          {(noteId || createdIdRef.current) ? (
+            <Pressable
+              style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.6 }]}
+              onPress={handleDelete}
+              hitSlop={8}
+            >
+              <Feather name="trash-2" size={18} color={C.danger} />
+            </Pressable>
           ) : null}
-        </View>
 
-        <Pressable
-          style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
-          onPress={handleDelete}
-        >
-          <Feather name="trash-2" size={20} color={C.danger} />
-        </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.saveBtn,
+              !canSave && styles.saveBtnDisabled,
+              pressed && canSave && { opacity: 0.85 },
+            ]}
+            onPress={handleSave}
+            disabled={!canSave}
+          >
+            {saving ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : saved && !hasChanges ? (
+              <>
+                <Feather name="check" size={14} color="#fff" />
+                <Text style={styles.saveBtnText}>Saved</Text>
+              </>
+            ) : (
+              <Text style={styles.saveBtnText}>Save</Text>
+            )}
+          </Pressable>
+        </View>
       </View>
 
       <KeyboardAwareScrollView
@@ -195,37 +226,52 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: C.border,
   },
-  iconBtn: {
-    width: 40,
-    height: 40,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 10,
-  },
-  statusRow: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    height: 28,
-  },
-  savedBadge: {
+  backBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    backgroundColor: C.tintSubtle,
-    borderRadius: 20,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    gap: 6,
   },
-  savedText: {
-    fontSize: 12,
+  backText: {
+    fontSize: 16,
     fontFamily: "Inter_500Medium",
-    color: C.tintDeep,
+    color: C.text,
+  },
+  topRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  deleteBtn: {
+    width: 36,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 8,
+    backgroundColor: C.dangerSubtle,
+  },
+  saveBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: C.tintDeep,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 10,
+    minWidth: 72,
+    justifyContent: "center",
+  },
+  saveBtnDisabled: {
+    opacity: 0.4,
+  },
+  saveBtnText: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#fff",
   },
   scroll: {
     flex: 1,
