@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -30,21 +30,27 @@ export default function EditorScreen() {
   const [title, setTitle] = useState(existing?.title ?? "");
   const [content, setContent] = useState(existing?.content ?? "");
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(!!existing);
-  const [hasChanges, setHasChanges] = useState(false);
 
   const contentRef = useRef<TextInput>(null);
   const createdIdRef = useRef<number | null>(noteId);
   const latestTitle = useRef(title);
   const latestContent = useRef(content);
 
-  useEffect(() => { latestTitle.current = title; }, [title]);
-  useEffect(() => { latestContent.current = content; }, [content]);
+  const handleTitleChange = (t: string) => {
+    setTitle(t);
+    latestTitle.current = t;
+  };
 
-  const doSave = useCallback(async (t: string, c: string): Promise<boolean> => {
-    if (!t.trim() && !c.trim()) return false;
+  const handleContentChange = (c: string) => {
+    setContent(c);
+    latestContent.current = c;
+  };
+
+  const doSave = useCallback(async () => {
+    const t = latestTitle.current.trim();
+    const c = latestContent.current;
+    if (!t && !c.trim()) return;
     setSaving(true);
-    setSaved(false);
     try {
       if (createdIdRef.current) {
         await updateNote(createdIdRef.current, t || "Untitled", c);
@@ -52,41 +58,33 @@ export default function EditorScreen() {
         const note = await createNote(t || "Untitled", c);
         createdIdRef.current = note.id;
       }
-      setSaved(true);
-      setHasChanges(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      return true;
+      router.back();
     } catch {
-      return false;
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setSaving(false);
     }
   }, [createNote, updateNote]);
 
-  const handleSave = useCallback(async () => {
-    await doSave(latestTitle.current, latestContent.current);
-  }, [doSave]);
+  const handleBack = useCallback(() => {
+    const t = latestTitle.current.trim();
+    const c = latestContent.current.trim();
+    const isNew = !createdIdRef.current;
+    const isDirty =
+      isNew
+        ? t.length > 0 || c.length > 0
+        : t !== (existing?.title ?? "") || c !== (existing?.content ?? "");
 
-  const handleBack = useCallback(async () => {
-    if (hasChanges && (latestTitle.current.trim() || latestContent.current.trim())) {
-      Alert.alert("Unsaved Changes", "Do you want to save before leaving?", [
-        {
-          text: "Discard",
-          style: "destructive",
-          onPress: () => router.back(),
-        },
-        {
-          text: "Save",
-          onPress: async () => {
-            await doSave(latestTitle.current, latestContent.current);
-            router.back();
-          },
-        },
+    if (isDirty) {
+      Alert.alert("Unsaved Changes", "Save your note before leaving?", [
+        { text: "Discard", style: "destructive", onPress: () => router.back() },
+        { text: "Save & Go Back", onPress: doSave },
       ]);
     } else {
       router.back();
     }
-  }, [doSave, hasChanges]);
+  }, [doSave, existing]);
 
   const handleDelete = useCallback(() => {
     if (!createdIdRef.current) {
@@ -109,21 +107,8 @@ export default function EditorScreen() {
     ]);
   }, [deleteNote]);
 
-  const handleTitleChange = (t: string) => {
-    setTitle(t);
-    setSaved(false);
-    setHasChanges(true);
-  };
-
-  const handleContentChange = (c: string) => {
-    setContent(c);
-    setSaved(false);
-    setHasChanges(true);
-  };
-
   const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
   const charCount = content.length;
-
   const canSave = (title.trim().length > 0 || content.trim().length > 0) && !saving;
 
   return (
@@ -138,48 +123,25 @@ export default function EditorScreen() {
           <Text style={styles.backText}>Notes</Text>
         </Pressable>
 
-        <View style={styles.topRight}>
-          {(noteId || createdIdRef.current) ? (
-            <Pressable
-              style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.6 }]}
-              onPress={handleDelete}
-              hitSlop={8}
-            >
-              <Feather name="trash-2" size={18} color={C.danger} />
-            </Pressable>
-          ) : null}
-
+        {(!!noteId || !!createdIdRef.current) && (
           <Pressable
-            style={({ pressed }) => [
-              styles.saveBtn,
-              !canSave && styles.saveBtnDisabled,
-              pressed && canSave && { opacity: 0.85 },
-            ]}
-            onPress={handleSave}
-            disabled={!canSave}
+            style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.6 }]}
+            onPress={handleDelete}
+            hitSlop={8}
           >
-            {saving ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : saved && !hasChanges ? (
-              <>
-                <Feather name="check" size={14} color="#fff" />
-                <Text style={styles.saveBtnText}>Saved</Text>
-              </>
-            ) : (
-              <Text style={styles.saveBtnText}>Save</Text>
-            )}
+            <Feather name="trash-2" size={18} color={C.danger} />
           </Pressable>
-        </View>
+        )}
       </View>
 
       <KeyboardAwareScrollView
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: insets.bottom + 60 },
+          { paddingBottom: insets.bottom + 24 },
         ]}
         keyboardShouldPersistTaps="handled"
-        bottomOffset={20}
+        bottomOffset={80}
         showsVerticalScrollIndicator={false}
       >
         <TextInput
@@ -194,6 +156,8 @@ export default function EditorScreen() {
           maxLength={200}
         />
 
+        <View style={styles.divider} />
+
         <TextInput
           ref={contentRef}
           style={styles.contentInput}
@@ -205,14 +169,31 @@ export default function EditorScreen() {
           textAlignVertical="top"
           autoFocus={!existing}
         />
-      </KeyboardAwareScrollView>
 
-      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 8 }]}>
         <Text style={styles.statsText}>
           {wordCount} {wordCount === 1 ? "word" : "words"} · {charCount}{" "}
           {charCount === 1 ? "char" : "chars"}
         </Text>
-      </View>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.saveBtn,
+            !canSave && styles.saveBtnDisabled,
+            pressed && canSave && styles.saveBtnPressed,
+          ]}
+          onPress={doSave}
+          disabled={!canSave}
+        >
+          {saving ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : (
+            <>
+              <Feather name="check" size={18} color="#fff" />
+              <Text style={styles.saveBtnText}>Save Note</Text>
+            </>
+          )}
+        </Pressable>
+      </KeyboardAwareScrollView>
     </View>
   );
 }
@@ -241,11 +222,6 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_500Medium",
     color: C.text,
   },
-  topRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
   deleteBtn: {
     width: 36,
     height: 36,
@@ -254,31 +230,12 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: C.dangerSubtle,
   },
-  saveBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    backgroundColor: C.tintDeep,
-    paddingHorizontal: 18,
-    paddingVertical: 9,
-    borderRadius: 10,
-    minWidth: 72,
-    justifyContent: "center",
-  },
-  saveBtnDisabled: {
-    opacity: 0.4,
-  },
-  saveBtnText: {
-    fontSize: 14,
-    fontFamily: "Inter_600SemiBold",
-    color: "#fff",
-  },
   scroll: {
     flex: 1,
   },
   scrollContent: {
     paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingTop: 20,
     flexGrow: 1,
   },
   titleInput: {
@@ -286,8 +243,13 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_700Bold",
     color: C.text,
     letterSpacing: -0.3,
-    marginBottom: 12,
+    paddingVertical: 4,
     padding: 0,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: C.border,
+    marginVertical: 14,
   },
   contentInput: {
     fontSize: 16,
@@ -295,18 +257,41 @@ const styles = StyleSheet.create({
     color: C.text,
     lineHeight: 26,
     padding: 0,
-    minHeight: 300,
-  },
-  bottomBar: {
-    paddingTop: 8,
-    paddingHorizontal: 20,
-    borderTopWidth: 1,
-    borderTopColor: C.border,
+    minHeight: 260,
   },
   statsText: {
     fontSize: 12,
     fontFamily: "Inter_400Regular",
     color: C.textTertiary,
-    textAlign: "center",
+    marginTop: 16,
+    marginBottom: 24,
+  },
+  saveBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: C.tintDeep,
+    borderRadius: 14,
+    paddingVertical: 16,
+    shadowColor: C.tintDeep,
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  saveBtnDisabled: {
+    opacity: 0.35,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  saveBtnPressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.98 }],
+  },
+  saveBtnText: {
+    fontSize: 16,
+    fontFamily: "Inter_600SemiBold",
+    color: "#fff",
   },
 });
